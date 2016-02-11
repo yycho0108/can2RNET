@@ -16,6 +16,7 @@ import time
 import numpy as np
 
 from geometry_msgs.msg import Twist
+from sensor_msgs.msg import BatteryState
 
 import threading
 
@@ -40,39 +41,20 @@ class RNETInterface(object):
         self._can  = can.interface.Bus(channel='can0', bustype='socketcan_ctypes'
                 ) # TODO : configure can_filters to filter joy input
 
-        ## distance counter (1m increments)
-        #self._can2 = can.interface.Bus(channel='can0', bustype='socketcan_ctypes',
-        #        can_filters=[{"can_id":0x1C300004, "can_mask":0x1FFFF0FF, "extended":True}])
-
-        # distance counter (1m increments)
+        ## battery
         self._can2 = can.interface.Bus(channel='can0', bustype='socketcan_ctypes',
-                can_filters=[{"can_id":0x790, "can_mask":0x1FF}])
-        self._cmd_vel = None
+                can_filters=[{"can_id":0x1C0C0000, "can_mask":0x1FFFF0FF, "extended":True}])
         
-        self._readings = {'f':[],'b':[],'l':[],'r':[]}
-        
-        t = threading.Thread(target=self.recv_distance)
+        self._battery = None
+
+        t = threading.Thread(target=self.recv_battery)
         t.daemon = True
         t.start()
 
-    def recv_distance(self):
-        print 'Begin Receiving'
-        ign = [
-                bytearray(b'\x22\x57\x00\xff\x1b\x00\x00\x00'),
-                bytearray(b'\x22\x57\x00\xff\x1c\x00\x00\x00')]
+    def recv_battery(self):
         while True:
             msg = self._can2.recv()
-            if msg.data not in ign:
-                if self._cmd_vel is not None:
-                    if self._cmd_vel.linear.x > 0:
-                        self._readings['f'].append('{:08b}'.format(msg.data[4]))
-                    elif self._cmd_vel.linear.x < 0:
-                        self._readings['b'].append('{:08b}'.format(msg.data[4]))
-                    elif self._cmd_vel.angular.z > 0:
-                        self._readings['l'].append('{:08b}'.format(msg.data[4]))
-                    elif self._cmd_vel.angular.z < 0:
-                        self._readings['r'].append('{:08b}'.format(msg.data[4]))
-                print '{0}={0:08b}'.format(int(msg.data[4]))
+            self._battery = msg.data[0]
 
     def set_speed(self, v):
         if 0<=v<=0x64:
@@ -147,6 +129,7 @@ class RNETTeleopNode(object):
         self._min_w=rospy.get_param('~min_w', default=0.0)
         self._cmd_timeout=rospy.get_param('~cmd_timeout', default=0.1) # stops after timeout
         self._cmd_vel_sub=rospy.Subscriber('cmd_vel', Twist, self.cmd_vel_cb)
+        self._bat_pub=rospy.Publisher('battery', BatteryState, queue_size=10)
         self._rnet = RNETInterface()
 
         self._cmd_vel = Twist()
@@ -167,8 +150,13 @@ class RNETTeleopNode(object):
         self._rnet._cmd_vel=self._cmd_vel
         self._last_cmd = rospy.Time.now()
 
-    def move(self):
-        return
+    def step(self):
+        if self._rnet._battery is not None:
+            bs_msg = BatteryState()
+            bs_msg.header.stamp = rospy.Time.now()
+            bs_msg.percentage = 1.0 * self._rnet._battery
+            self._bat_pub.publish(bs_msg)
+
         if (rospy.Time.now() - self._last_cmd).to_sec() > self._cmd_timeout:
             # zero-out velocity commands
             self._cmd_vel.linear.x = 0
@@ -193,21 +181,19 @@ class RNETTeleopNode(object):
 
             if np.abs(v) > self._min_v or np.abs(w) > self._min_w:
                 self._rnet.send(self._joy_frame + '#' + dec2hex(cmd_x, 2) + dec2hex(cmd_y, 2))
-                self._rnet.send('782#405000FF02000001')
             else:
                 # below thresh, stop
                 self._rnet.send(self._joy_frame + '#' + dec2hex(0, 2) + dec2hex(0, 2))
-                self._rnet.send('782#405000FF02000001')
 
     def spin(self):
         rate = rospy.Rate(50)
         rospy.on_shutdown(self.save)
         while not rospy.is_shutdown():
-            self.move()
+            self.step()
             rate.sleep()
 
     def save(self):
-        print self._rnet._readings
+        pass
 
     def run(self):
         # 1 - check R-NET Joystick
