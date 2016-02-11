@@ -68,3 +68,9 @@ $ candump -n 1 can0,7b3:7ff     #wait for can id 7B3
 Or run `python3 JoyLocal.py` to control a R-Net based PWC using any usb gamepad connected to the pi3.
 
 Python 3 is required.
+
+## Testing Example
+
+```bash
+python rnet_teleop_node.py _disable_chair_joy:=true _joy_frame:="0x02000200" _speed:=100
+```
