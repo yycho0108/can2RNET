@@ -29,7 +29,7 @@ def opencansocket(busnum):
     #open socketcan connection
     try:
         #cansocket = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
-        cansocket = can.interface.Bus(channel='vcan0', bustype='socketcan_ctypes')#channel='?'
+        cansocket = can.interface.Bus(channel='can0', bustype='socketcan_ctypes')#channel='?'
         #cansocket.bind(('can'+busnum,))
         #print('socket connected to can'+busnum)
     except socket.error:
@@ -45,13 +45,13 @@ def opencansocket(busnum):
 
 class RNETInterface(object):
     def __init__(self):
-        self._can = cr.opencansocket(0)
+        self._can = opencansocket(0)
 
     def set_speed(self, v):
         if 0<=v<=0x64:
-            self.send('0a040100#'+dec2hex(v,2))
+            return self.send('0a040100#'+dec2hex(v,2))
         else:
-            print('Invalid RNET SpeedRange: ' + str(v))
+            return False
 
     def beep(self):
         self.send("181c0100#0260000000000000")
@@ -81,6 +81,10 @@ class RNETInterface(object):
         #frame_id = cf.split('#')[0]
         #return frame_id
 
+    def disable_joy(self):
+        for i in range(0,3):
+            self.send('0c000000#')
+
     def send(self, msg_str, *args, **kwargs):
         msg_l = msg_str.split('#')
         rtr   = ('#R' in msg_str)
@@ -92,13 +96,13 @@ class RNETInterface(object):
         msg = can.Message(
                 timestamp       = time.time(),
                 is_remote_frame = rtr,
-                extended_id     = len(msg_l[0])>=8,
+                extended_id     = len(msg_l[0])>4,
                 arbitration_id  = int(msg_l[0], 16),
                 dlc             = 0 if rtr else len(data), # TODO : why 0?
                 data            = data
                 )
-
-        return self._can.send(msg, *args, **kwargs)
+        self._can.send(msg, *args, **kwargs)
+        return True
 
     def recvfrom(self, *args, **kwargs):
         #return self._can.recvfrom(*args, **kwargs)
@@ -140,13 +144,18 @@ class RNETTeleopNode(object):
             self._cmd_vel.angular.z = 0
 
         #prebuild the frame we are waiting on
-	#rnet_joystick_frame_raw = build_frame(self._joy_frame+ "#0000")
+        #rnet_joystick_frame_raw = build_frame(self._joy_frame+ "#0000")
 
-        cf = self._rnet.recvfrom()#16)
+        if self._disable_chair_joy:
+            cf = self._joy_frame
+        else:
+            cf = self._rnet.recvfrom()#16)
+            cf = aid_str(cf)
+
         v = self._cmd_vel.linear.x
         w = self._cmd_vel.angular.z
 
-        if aid_str(cf) == self._joy_frame:
+        if cf == self._joy_frame:
             # for joy : y=fw, x=turn; 0-200
             cmd_y = int(v * 100.)
             cmd_x = -int(w * 100.)
@@ -167,11 +176,16 @@ class RNETTeleopNode(object):
         rospy.loginfo('Found R-NET Joystick frame: {}'.format(joy_frame))
 
         # set chair's speed to the lowest setting.
-        self._rnet.set_speed(self._speed)
+        suc = self._rnet.set_speed(self._speed)
+        if not suc:
+            rospy.logwarn('RNET Set SpeedRange Failed @ v={}' .format(self._speed))
+            return
+        rospy.loginfo('RNET Set SpeedRange Success @ v={}' .format(self._speed))
 
         if self._disable_chair_joy:
-            rospy.loginfo('Disabling Joystick is currently not supported. restart with _disable_chair_joy:=False')
-            return
+            self._rnet.disable_joy()
+            #rospy.loginfo('Disabling Joystick is currently not supported. restart with _disable_chair_joy:=False')
+            #return
             #rospy.loginfo("\n You chose to disable the R-Net Joystick temporary. Restart the chair to fix. ")
             #joy_frame = RNET_JSMerror_exploit(can_socket) # ?????
 
@@ -180,11 +194,12 @@ class RNETTeleopNode(object):
             #    args=(can_socket,joy_frame,),
             #    daemon=True)
             #sendjoyframethread.start()
-        else:
-            rate = rospy.Rate(50)
-            while not rospy.is_shutdown():
-                self.move()
-                rate.sleep()
+
+        rate = rospy.Rate(50)
+        while not rospy.is_shutdown():
+            self.move()
+            rate.sleep()
+
             #rospy.loginfo("\n You chose to allow the R-Net Joystick.")
             #rospy.loginfo('Waiting for RNET-Joystick frame ...')
 
