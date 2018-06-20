@@ -259,7 +259,6 @@ def inject_rnet_joystick_frame(can_socket, rnet_joystick_id):
 		if cf == rnet_joystick_frame_raw:
 			cansend(can_socket, rnet_joystick_id + '#' + dec2hex(joystick_x, 2) + dec2hex(joystick_y, 2))
 
-
 #Waits for any frame containing a Joystick position
 #Returns: JoyFrame extendedID as text
 def wait_rnet_joystick_frame(can_socket, start_time):
