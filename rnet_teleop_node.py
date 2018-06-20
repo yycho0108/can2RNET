@@ -3,8 +3,26 @@ import socket, sys, os, array, threading
 from fcntl import ioctl
 import can2RNET as cr
 from can2RNET import *
+import can
+import time
+import numpy as np
 
 from geometry_msgs.msg import Twist
+
+def dec2hex(dec,hexlen):  #convert dec to hex with leading 0s and no '0x'
+    h=hex(int(dec))[2:]
+    l=len(h)
+    if h[l-1]=="L":
+        l-=1  #strip the 'L' that python int sticks on
+    if h[l-2]=="x":
+        h= '0'+hex(int(dec))[1:]
+    return ('0'*hexlen+h)[l:l+hexlen]
+
+def aid_str(msg):
+    if msg.id_type:
+        return '{0:08x}'.format(msg.arbitration_id)
+    else:
+        return '{0:03x}'.format(msg.arbitration_id)
 
 class RNETInterface(object):
     def __init__(self):
@@ -12,9 +30,9 @@ class RNETInterface(object):
 
     def set_speed(self, v):
         if 0<=v<=0x64:
-            self.send('0a040100#'+dec2hex(speed_range,2))
+            self.send('0a040100#'+dec2hex(v,2))
         else:
-            print('Invalid RNET SpeedRange: ' + str(speed_range))
+            print('Invalid RNET SpeedRange: ' + str(v))
 
     def beep(self):
         self.send("181c0100#0260000000000000")
@@ -24,16 +42,48 @@ class RNETInterface(object):
         self.send("181C0100#105a205b00000000")
 
     def get_joy_frame(self):
-        cf, addr = self.recvfrom(16)
-        candump_frame = dissect_frame(cf)
-        frame_id = candump_frame.split('#')[0]
-        return frame_id
+        msg = self.recvfrom()#16)
+        return aid_str(msg)
+        #m_id = ''
+        #if msg.id_type:
+        #    m_id = '{0:08x}'.format(msg.arbitration_id)
+        #else:
+        #    m_id = '{0:03x}'.format(msg.arbitration_id)
+        #print m_id
+        #return m_id
+        #s = m_id + '#' + ''.join('%02X' % x for x in msg.data)
+        #if msg.is_remote_frame:
+        #    s += 'R'
+        #return s
+        # format : id#data[R]
+        #candump_frame = dissect_frame(cf)
+        #return (can_idtxt + '#'+''.join(["%02X" % x for x in data[:can_dlc]]) + 'R'*rtr)
 
-    def send(self, *args, **kwargs):
-        return cansend(self._can, *args, **kwargs)
+        #frame_id = cf.split('#')[0]
+        #return frame_id
+
+    def send(self, msg_str, *args, **kwargs):
+        msg_l = msg_str.split('#')
+        rtr   = ('#R' in msg_str)
+        data  = None
+        if rtr:
+            data = bytearray(b'\x00\x00\x00\x00\x00\x00\x00\x00')
+        else:
+            data = bytearray.fromhex(msg_l[1])
+        msg = can.Message(
+                timestamp       = time.time(),
+                is_remote_frame = rtr,
+                extended_id     = len(msg_l[0])>=8,
+                arbitration_id  = int(msg_l[0], 16),
+                dlc             = 0 if rtr else len(data), # TODO : why 0?
+                data            = data
+                )
+
+        return self._can.send(msg, *args, **kwargs)
 
     def recvfrom(self, *args, **kwargs):
-        return self._can.recvfrom(*args, **kwargs)
+        #return self._can.recvfrom(*args, **kwargs)
+        return self._can.recv(*args, **kwargs)
 
 class RNETTeleopNode(object):
 
@@ -47,12 +97,15 @@ class RNETTeleopNode(object):
         self._rnet = RNETInterface()
         self._joy_frame = None
 
+        self._cmd_vel = Twist()
+        self._last_cmd = rospy.Time.now()
+
     def wait_rnet_joystick_frame(self, dur=0.2):
         frame_id = ''
         start = rospy.Time.now()
         while frame_id[0:3] != '020': # look for joystick frame ID
             frame_id = self._rnet.get_joy_frame()
-            if (rospy.Time.now() - start.to_sec()) > dur:
+            if (rospy.Time.now() - start).to_sec() > dur:
                 rospy.loginfo('... Joy frame wait timed out')
                 return False, None
         return True, frame_id
@@ -68,25 +121,26 @@ class RNETTeleopNode(object):
             self._cmd_vel.angular.z = 0
 
         #prebuild the frame we are waiting on
-	rnet_joystick_frame_raw = build_frame(self._joy_frame+ "#0000")
-        cf, addr = self._rnet.recvfrom(16)
+	#rnet_joystick_frame_raw = build_frame(self._joy_frame+ "#0000")
+
+        cf = self._rnet.recvfrom()#16)
         v = self._cmd_vel.linear.x
         w = self._cmd_vel.angular.z
 
-        if cf == rnet_joystick_frame_raw:
+        if aid_str(cf) == self._joy_frame:
             # for joy : y=fw, x=turn; 0-200
             cmd_y = int(v * 100.)
             cmd_x = -int(w * 100.)
 
             if np.abs(v) > self._min_v or np.abs(w) > self._min_w:
-                self._rnet.send(rnet_joystick_id + '#' + dec2hex(cmd_x, 2) + dec2hex(cmd_y, 2))
+                self._rnet.send(self._joy_frame + '#' + dec2hex(cmd_x, 2) + dec2hex(cmd_y, 2))
             else:
-                self._rnet.send(rnet_joystick_id + '#' + dec2hex(cmd_x, 2) + dec2hex(cmd_y, 2))
+                self._rnet.send(self._joy_frame + '#' + dec2hex(cmd_x, 2) + dec2hex(cmd_y, 2))
 
     def run(self):
         # 1 - check R-NET Joystick
         rospy.loginfo('Waiting for R-NET Joystick Frame ... ')
-        suc, joy_frame = self.wait_rnet_joystick_frame(0.2)
+        suc, joy_frame = self.wait_rnet_joystick_frame(5.0)
         self._joy_frame = joy_frame
         if not suc:
             rospy.logerr('No R-NET Joystick frame seen within minimum time')
