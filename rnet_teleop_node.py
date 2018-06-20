@@ -2,7 +2,7 @@ import rospy
 import socket, sys, os, array, threading
 from fcntl import ioctl
 import can2RNET as cr
-from can2RNET import *
+#from can2RNET import *
 import can
 import time
 import numpy as np
@@ -23,6 +23,25 @@ def aid_str(msg):
         return '{0:08x}'.format(msg.arbitration_id)
     else:
         return '{0:03x}'.format(msg.arbitration_id)
+
+def opencansocket(busnum):
+    busnum=str(busnum)
+    #open socketcan connection
+    try:
+        #cansocket = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
+        cansocket = can.interface.Bus(channel='vcan0', bustype='socketcan_ctypes')#channel='?'
+        #cansocket.bind(('can'+busnum,))
+        #print('socket connected to can'+busnum)
+    except socket.error:
+        print ('Failed to open can'+busnum+' socket')
+        print ('Attempting to open vcan'+busnum+' socket')
+        try:
+            cansocket.bind(('vcan'+busnum,))
+            print('socket connected to vcan'+busnum)
+        except:
+            print ('Failed to open vcan'+busnum+' socket')
+            cansocket = ''
+    return cansocket
 
 class RNETInterface(object):
     def __init__(self):
