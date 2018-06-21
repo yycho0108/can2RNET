@@ -31,9 +31,14 @@ class RNETInterface(object):
         # joystick
         self._can  = can.interface.Bus(channel='can0', bustype='socketcan_ctypes'
                 ) # TODO : configure can_filters to filter joy input
-        # distance counter
+
+        ## distance counter (1m increments)
+        #self._can2 = can.interface.Bus(channel='can0', bustype='socketcan_ctypes',
+        #        can_filters=[{"can_id":0x1C300004, "can_mask":0x1FFFF0FF, "extended":True}])
+
+        # distance counter (1m increments)
         self._can2 = can.interface.Bus(channel='can0', bustype='socketcan_ctypes',
-                can_filters=[{"can_id":0x1C300004, "can_mask":0x1FFFF0FF, "extended":True}])
+                can_filters=[{"can_id":0x790, "can_mask":0x1FF}])
         
         t = threading.Thread(target=self.recv_distance)
         t.daemon = True
@@ -41,9 +46,13 @@ class RNETInterface(object):
 
     def recv_distance(self):
         print 'Begin Receiving'
+        ign = [
+                bytearray(b'\x22\x57\x00\xff\x1b\x00\x00\x00'),
+                bytearray(b'\x22\x57\x00\xff\x1c\x00\x00\x00')]
         while True:
             msg = self._can2.recv()
-            print msg
+            if msg.data not in ign:
+                print '{:08b}'.format(int(msg.data[4]))
 
     def set_speed(self, v):
         if 0<=v<=0x64:
