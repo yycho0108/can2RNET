@@ -1,13 +1,15 @@
 import rospy
 import socket, sys, os, array, threading
 from fcntl import ioctl
-import can2RNET as cr
+#import can2RNET as cr
 #from can2RNET import *
 import can
 import time
 import numpy as np
 
 from geometry_msgs.msg import Twist
+
+import threading
 
 def dec2hex(dec,hexlen):  #convert dec to hex with leading 0s and no '0x'
     h=hex(int(dec))[2:]
@@ -24,28 +26,24 @@ def aid_str(msg):
     else:
         return '{0:03x}'.format(msg.arbitration_id)
 
-def opencansocket(busnum):
-    busnum=str(busnum)
-    #open socketcan connection
-    try:
-        #cansocket = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
-        cansocket = can.interface.Bus(channel='can0', bustype='socketcan_ctypes')#channel='?'
-        #cansocket.bind(('can'+busnum,))
-        #print('socket connected to can'+busnum)
-    except socket.error:
-        print ('Failed to open can'+busnum+' socket')
-        print ('Attempting to open vcan'+busnum+' socket')
-        try:
-            cansocket.bind(('vcan'+busnum,))
-            print('socket connected to vcan'+busnum)
-        except:
-            print ('Failed to open vcan'+busnum+' socket')
-            cansocket = ''
-    return cansocket
-
 class RNETInterface(object):
     def __init__(self):
-        self._can = opencansocket(0)
+        # joystick
+        self._can  = can.interface.Bus(channel='can0', bustype='socketcan_ctypes'
+                ) # TODO : configure can_filters to filter joy input
+        # distance counter
+        self._can2 = can.interface.Bus(channel='can0', bustype='socketcan_ctypes',
+                can_filters=[{"can_id":0x1C300004, "can_mask":0x1FFFF0FF, "extended":True}])
+        
+        t = threading.Thread(target=self.recv_distance)
+        t.daemon = True
+        t.start()
+
+    def recv_distance(self):
+        print 'Begin Receiving'
+        while True:
+            msg = self._can2.recv()
+            print msg
 
     def set_speed(self, v):
         if 0<=v<=0x64:
@@ -143,9 +141,6 @@ class RNETTeleopNode(object):
             self._cmd_vel.linear.x = 0
             self._cmd_vel.angular.z = 0
 
-        #prebuild the frame we are waiting on
-        #rnet_joystick_frame_raw = build_frame(self._joy_frame+ "#0000")
-
         if self._disable_chair_joy:
             cf = self._joy_frame
         else:
@@ -164,6 +159,12 @@ class RNETTeleopNode(object):
                 self._rnet.send(self._joy_frame + '#' + dec2hex(cmd_x, 2) + dec2hex(cmd_y, 2))
             else:
                 self._rnet.send(self._joy_frame + '#' + dec2hex(cmd_x, 2) + dec2hex(cmd_y, 2))
+
+    def spin(self):
+        rate = rospy.Rate(50)
+        while not rospy.is_shutdown():
+            self.move()
+            rate.sleep()
 
     def run(self):
         # 1 - check R-NET Joystick
@@ -184,37 +185,10 @@ class RNETTeleopNode(object):
 
         if self._disable_chair_joy:
             self._rnet.disable_joy()
-            #rospy.loginfo('Disabling Joystick is currently not supported. restart with _disable_chair_joy:=False')
-            #return
-            #rospy.loginfo("\n You chose to disable the R-Net Joystick temporary. Restart the chair to fix. ")
-            #joy_frame = RNET_JSMerror_exploit(can_socket) # ?????
+            rospy.loginfo("You chose to disable the R-Net Joystick temporary. Restart the chair to fix.")
+        rospy.loginfo("You chose to allow the R-Net Joystick - There may be some control issues.")
 
-            #sendjoyframethread = threading.Thread(
-            #    target=send_joystick_canframe,
-            #    args=(can_socket,joy_frame,),
-            #    daemon=True)
-            #sendjoyframethread.start()
-
-        rate = rospy.Rate(50)
-        while not rospy.is_shutdown():
-            self.move()
-            rate.sleep()
-
-            #rospy.loginfo("\n You chose to allow the R-Net Joystick.")
-            #rospy.loginfo('Waiting for RNET-Joystick frame ...')
-
-            #suc, joy_frame = self.wait_rnet_joystick_frame(0.2)
-            #if not suc:
-            #    rospy.logerr('No RNET-Joystick frame seen within minimum time')
-            #    return
-
-            #rospy.loginfo('Found RNET-Joystick frame: {}'.format(joy_frame))
-
-            #inject_rnet_joystick_frame_thread = threading.Thread(
-            #    target=inject_rnet_joystick_frame,
-            #    args=(can_socket, rnet_joystick_id,),
-            #    daemon=True)
-            #inject_rnet_joystick_frame_thread.start()
+        self.spin()
 
 if __name__ == "__main__":
     rospy.init_node('rnet_teleop_node')
