@@ -1,3 +1,11 @@
+"""
+
+ROS Binding for the RNet Wheelchair.
+Currently supports teleoperation and battery readings; hoping to get odometry via wheel encoders.
+
+To figure out 'non-trivial' rnet messages:
+candump can0 -L | grep -Ev '02001100#|02000200#|00E#|03C30F0F#|0C140300#|0C140000#|1C0C0000#|14300000#|1C300004#'
+"""
 import rospy
 import socket, sys, os, array, threading
 from fcntl import ioctl
@@ -119,6 +127,7 @@ class RNETTeleopNode(object):
 
     def __init__(self):
         self._disable_chair_joy=rospy.get_param('~disable_chair_joy', default=False)
+        self._joy_frame = rospy.get_param('~joy_frame', default='02001100')
         self._speed=rospy.get_param('~speed', default=50) # speed, percentage 0-100
         self._min_v=rospy.get_param('~min_v', default=0.0)
         self._min_w=rospy.get_param('~min_w', default=0.0)
@@ -179,12 +188,16 @@ class RNETTeleopNode(object):
         # 1 - check R-NET Joystick
         rospy.loginfo('Waiting for R-NET Joystick Frame ... ')
         suc, joy_frame = self.wait_rnet_joystick_frame(5.0)
-        self._joy_frame = joy_frame
-        if not suc:
-            rospy.logerr('No R-NET Joystick frame seen within minimum time')
-            return
-        rospy.loginfo('Found R-NET Joystick frame: {}'.format(joy_frame))
-
+        if suc:
+            rospy.loginfo('Found R-NET Joystick frame: {}'.format(joy_frame))
+            self._joy_frame = joy_frame
+        else:
+            if self._joy_frame is not None:
+                rospy.logwarn('No R-NET Joystick frame seen within minimum time')
+                rospy.logwarn('Using Supplied Joy Frame : {}'.format(self._joy_frame))
+            else:
+                rospy.logerr('No R-NET Joystick frame seen within minimum time')
+                return
         # set chair's speed to the lowest setting.
         suc = self._rnet.set_speed(self._speed)
         if not suc:
