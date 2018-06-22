@@ -166,8 +166,10 @@ class RNETTeleopNode(object):
             cf = self._rnet.recvfrom()#16)
             cf = aid_str(cf)
 
-        v = self._cmd_vel.linear.x
-        w = self._cmd_vel.angular.z
+        # TODO : calibrate to m/s and scale accordingly
+        # currently, v / w are expressed in fractions where 1 = max fw, -1 = max bw
+        v = np.clip(self._cmd_vel.linear.x, -1.0, 1.0)
+        w = np.clip(self._cmd_vel.angular.z, -1.0, 1.0)
 
         if cf == self._joy_frame:
             # for joy : y=fw, x=turn; 0-256
