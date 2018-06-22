@@ -47,6 +47,9 @@ class RNETInterface(object):
         # distance counter (1m increments)
         self._can2 = can.interface.Bus(channel='can0', bustype='socketcan_ctypes',
                 can_filters=[{"can_id":0x790, "can_mask":0x1FF}])
+        self._cmd_vel = None
+        
+        self._readings = {'f':[],'b':[],'l':[],'r':[]}
         
         t = threading.Thread(target=self.recv_distance)
         t.daemon = True
@@ -60,7 +63,16 @@ class RNETInterface(object):
         while True:
             msg = self._can2.recv()
             if msg.data not in ign:
-                print '{:08b}'.format(int(msg.data[4]))
+                if self._cmd_vel is not None:
+                    if self._cmd_vel.linear.x > 0:
+                        self._readings['f'].append('{:08b}'.format(msg.data[4]))
+                    elif self._cmd_vel.linear.x < 0:
+                        self._readings['b'].append('{:08b}'.format(msg.data[4]))
+                    elif self._cmd_vel.angular.z > 0:
+                        self._readings['l'].append('{:08b}'.format(msg.data[4]))
+                    elif self._cmd_vel.angular.z < 0:
+                        self._readings['r'].append('{:08b}'.format(msg.data[4]))
+                print '{0}={0:08b}'.format(int(msg.data[4]))
 
     def set_speed(self, v):
         if 0<=v<=0x64:
@@ -152,13 +164,16 @@ class RNETTeleopNode(object):
 
     def cmd_vel_cb(self, msg):
         self._cmd_vel = msg
+        self._rnet._cmd_vel=self._cmd_vel
         self._last_cmd = rospy.Time.now()
 
     def move(self):
+        return
         if (rospy.Time.now() - self._last_cmd).to_sec() > self._cmd_timeout:
             # zero-out velocity commands
             self._cmd_vel.linear.x = 0
             self._cmd_vel.angular.z = 0
+            self._rnet._cmd_vel=self._cmd_vel
 
         if self._disable_chair_joy:
             cf = self._joy_frame
@@ -178,15 +193,21 @@ class RNETTeleopNode(object):
 
             if np.abs(v) > self._min_v or np.abs(w) > self._min_w:
                 self._rnet.send(self._joy_frame + '#' + dec2hex(cmd_x, 2) + dec2hex(cmd_y, 2))
+                self._rnet.send('782#405000FF02000001')
             else:
                 # below thresh, stop
                 self._rnet.send(self._joy_frame + '#' + dec2hex(0, 2) + dec2hex(0, 2))
+                self._rnet.send('782#405000FF02000001')
 
     def spin(self):
         rate = rospy.Rate(50)
+        rospy.on_shutdown(self.save)
         while not rospy.is_shutdown():
             self.move()
             rate.sleep()
+
+    def save(self):
+        print self._rnet._readings
 
     def run(self):
         # 1 - check R-NET Joystick
