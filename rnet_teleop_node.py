@@ -127,14 +127,15 @@ class RNETTeleopNode(object):
 
     def __init__(self):
         self._disable_chair_joy=rospy.get_param('~disable_chair_joy', default=False)
-        self._joy_frame = rospy.get_param('~joy_frame', default='02001100')
+        self._joy_frame = rospy.get_param('~joy_frame', default=None)#'02001100')
+        if not self._joy_frame is None:
+            self._joy_frame = '{0:08x}'.format(self._joy_frame)
         self._speed=rospy.get_param('~speed', default=50) # speed, percentage 0-100
         self._min_v=rospy.get_param('~min_v', default=0.0)
         self._min_w=rospy.get_param('~min_w', default=0.0)
         self._cmd_timeout=rospy.get_param('~cmd_timeout', default=0.1) # stops after timeout
         self._cmd_vel_sub=rospy.Subscriber('cmd_vel', Twist, self.cmd_vel_cb)
         self._rnet = RNETInterface()
-        self._joy_frame = None
 
         self._cmd_vel = Twist()
         self._last_cmd = rospy.Time.now()
@@ -169,14 +170,15 @@ class RNETTeleopNode(object):
         w = self._cmd_vel.angular.z
 
         if cf == self._joy_frame:
-            # for joy : y=fw, x=turn; 0-200
-            cmd_y = int(v * 100.)
-            cmd_x = -int(w * 100.)
+            # for joy : y=fw, x=turn; 0-256
+            cmd_y = 0x100 + int(v * 0x3FFF) >> 8 & 0xFF
+            cmd_x = 0x100 + int(-w * 0x3FFF) >> 8 & 0xFF
 
             if np.abs(v) > self._min_v or np.abs(w) > self._min_w:
                 self._rnet.send(self._joy_frame + '#' + dec2hex(cmd_x, 2) + dec2hex(cmd_y, 2))
             else:
-                self._rnet.send(self._joy_frame + '#' + dec2hex(cmd_x, 2) + dec2hex(cmd_y, 2))
+                # below thresh, stop
+                self._rnet.send(self._joy_frame + '#' + dec2hex(0, 2) + dec2hex(0, 2))
 
     def spin(self):
         rate = rospy.Rate(50)
@@ -187,7 +189,7 @@ class RNETTeleopNode(object):
     def run(self):
         # 1 - check R-NET Joystick
         rospy.loginfo('Waiting for R-NET Joystick Frame ... ')
-        suc, joy_frame = self.wait_rnet_joystick_frame(5.0)
+        suc, joy_frame = self.wait_rnet_joystick_frame(0.2)
         if suc:
             rospy.loginfo('Found R-NET Joystick frame: {}'.format(joy_frame))
             self._joy_frame = joy_frame
@@ -208,7 +210,8 @@ class RNETTeleopNode(object):
         if self._disable_chair_joy:
             self._rnet.disable_joy()
             rospy.loginfo("You chose to disable the R-Net Joystick temporary. Restart the chair to fix.")
-        rospy.loginfo("You chose to allow the R-Net Joystick - There may be some control issues.")
+        else:
+            rospy.loginfo("You chose to allow the R-Net Joystick - There may be some control issues.")
 
         self.spin()
 
