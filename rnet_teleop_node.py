@@ -176,7 +176,7 @@ class RNETTeleopNode(object):
         if cf == self._joy_frame:
             # for joy : y=fw, x=turn; 0-256
             cmd_y = 0x100 + int(v * self._v_scale * 0x3FFF) >> 8 & 0xFF
-            cmd_x = 0x100 + int(-w * self._v_scale * 0x3FFF) >> 8 & 0xFF
+            cmd_x = 0x100 + int(-w * self._w_scale * 0x3FFF) >> 8 & 0xFF
 
             if np.abs(v) > self._min_v or np.abs(w) > self._min_w:
                 self._rnet.send(self._joy_frame + '#' + dec2hex(cmd_x, 2) + dec2hex(cmd_y, 2))
