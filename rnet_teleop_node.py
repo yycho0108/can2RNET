@@ -27,9 +27,12 @@ def aid_str(msg):
         return '{0:03x}'.format(msg.arbitration_id)
 
 class RNETInterface(object):
-    def __init__(self):
+    def __init__(self, channel='can0'):
+        # data ...
+        self._battery = None
+
         # joystick
-        self._can  = can.interface.Bus(channel='can0', bustype='socketcan_ctypes'
+        self._can  = can.interface.Bus(channel=channel, bustype='socketcan_ctypes'
                 ) # TODO : configure can_filters to filter joy input
 
         ## distance counter (1m increments)
@@ -37,10 +40,18 @@ class RNETInterface(object):
         #        can_filters=[{"can_id":0x1C300004, "can_mask":0x1FFFF0FF, "extended":True}])
 
         # distance counter (1m increments)
-        self._can2 = can.interface.Bus(channel='can0', bustype='socketcan_ctypes',
+        self._can2 = can.interface.Bus(channel=channel, bustype='socketcan_ctypes',
                 can_filters=[{"can_id":0x790, "can_mask":0x1FF}])
+
+        # battery
+        self._can3 = can.interface.Bus(channel=channel, bustype='socketcan_ctypes',
+                can_filters=[{"can_id":0x1C0C0000, "can_mask":0x1FFFF0FF, "extended":True}])
         
         t = threading.Thread(target=self.recv_distance)
+        t.daemon = True
+        t.start()
+
+        t = threading.Thread(target=self.recv_battery)
         t.daemon = True
         t.start()
 
@@ -53,6 +64,12 @@ class RNETInterface(object):
             msg = self._can2.recv()
             if msg.data not in ign:
                 print '{:08b}'.format(int(msg.data[4]))
+
+    def recv_battery(self):
+        print 'Begin Receiving'
+        while True:
+            msg = self._can3.recv()
+            self._battery = int(msg.data[0])
 
     def set_speed(self, v):
         if 0<=v<=0x64:
@@ -70,23 +87,6 @@ class RNETInterface(object):
     def get_joy_frame(self):
         msg = self.recvfrom()#16)
         return aid_str(msg)
-        #m_id = ''
-        #if msg.id_type:
-        #    m_id = '{0:08x}'.format(msg.arbitration_id)
-        #else:
-        #    m_id = '{0:03x}'.format(msg.arbitration_id)
-        #print m_id
-        #return m_id
-        #s = m_id + '#' + ''.join('%02X' % x for x in msg.data)
-        #if msg.is_remote_frame:
-        #    s += 'R'
-        #return s
-        # format : id#data[R]
-        #candump_frame = dissect_frame(cf)
-        #return (can_idtxt + '#'+''.join(["%02X" % x for x in data[:can_dlc]]) + 'R'*rtr)
-
-        #frame_id = cf.split('#')[0]
-        #return frame_id
 
     def disable_joy(self):
         for i in range(0,3):
@@ -119,7 +119,9 @@ class RNETTeleopNode(object):
 
     def __init__(self):
         self._disable_chair_joy=rospy.get_param('~disable_chair_joy', default=False)
-        self._speed=rospy.get_param('~speed', default=50) # speed, percentage 0-100
+        self._speed=rospy.get_param('~speed', default=100) # speed, percentage 0-100
+        self._v_scale=rospy.get_param('~v_scale', default=1.0)
+        self._w_scale=rospy.get_param('~w_scale', default=1.0)
         self._min_v=rospy.get_param('~min_v', default=0.0)
         self._min_w=rospy.get_param('~min_w', default=0.0)
         self._cmd_timeout=rospy.get_param('~cmd_timeout', default=0.1) # stops after timeout
@@ -161,8 +163,13 @@ class RNETTeleopNode(object):
 
         if cf == self._joy_frame:
             # for joy : y=fw, x=turn; 0-200
-            cmd_y = int(v * 100.)
-            cmd_x = -int(w * 100.)
+            cmd_y = int(v * 100. * self._v_scale)
+            cmd_x = -int(w * 100. * self._w_scale)
+
+            # clip velocity
+            # TODO : check for correctness
+            cmd_y = np.clip(cmd_y, -100, 100)
+            cmd_x = np.clip(cmd_x, -100, 100)
 
             if np.abs(v) > self._min_v or np.abs(w) > self._min_w:
                 self._rnet.send(self._joy_frame + '#' + dec2hex(cmd_x, 2) + dec2hex(cmd_y, 2))
