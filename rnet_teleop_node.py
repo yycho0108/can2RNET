@@ -72,7 +72,9 @@ class RNETInterface(object):
         self.send("181C0100#105a205b00000000")
 
     def get_joy_frame(self):
-        msg = self.recvfrom()#16)
+        msg = self.recvfrom(timeout=0.1)#16)
+        if msg is None:
+            return None
         return aid_str(msg)
 
     def disable_joy(self):
@@ -127,7 +129,7 @@ class RNETTeleopNode(object):
         start = rospy.Time.now()
         while frame_id[0:3] != '020': # look for joystick frame ID
             frame_id = self._rnet.get_joy_frame()
-            if (rospy.Time.now() - start).to_sec() > dur:
+            if frame_id is None or (rospy.Time.now() - start).to_sec() > dur:
                 rospy.loginfo('... Joy frame wait timed out')
                 return False, None
         return True, frame_id
@@ -153,7 +155,7 @@ class RNETTeleopNode(object):
         if self._disable_chair_joy:
             cf = self._joy_frame
         else:
-            cf = self._rnet.recvfrom()#16)
+            cf = self._rnet.recvfrom(timeout=0.1)#16)
             cf = aid_str(cf)
 
         # TODO : calibrate to m/s and scale accordingly
