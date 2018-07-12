@@ -156,7 +156,8 @@ class RNETTeleopNode(object):
             cf = self._joy_frame
         else:
             cf = self._rnet.recvfrom(timeout=0.1)#16)
-            cf = aid_str(cf)
+            if cf is not None:
+                cf = aid_str(cf)
 
         # TODO : calibrate to m/s and scale accordingly
         # currently, v / w are expressed in fractions where 1 = max fw, -1 = max bw
