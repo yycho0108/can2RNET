@@ -161,13 +161,13 @@ class RNETTeleopNode(object):
 
         # TODO : calibrate to m/s and scale accordingly
         # currently, v / w are expressed in fractions where 1 = max fw, -1 = max bw
-        v = np.clip(self._cmd_vel.linear.x, -1.0, 1.0)
-        w = np.clip(self._cmd_vel.angular.z, -1.0, 1.0)
+        v = np.clip(self._v_scale * self._cmd_vel.linear.x,  -1.0, 1.0)
+        w = np.clip(self._w_scale * self._cmd_vel.angular.z, -1.0, 1.0)
 
         if cf == self._joy_frame:
             # for joy : y=fw, x=turn; 0-256
-            cmd_y = 0x100 + int(v * self._v_scale * 0x3FFF) >> 8 & 0xFF
-            cmd_x = 0x100 + int(-w * self._w_scale * 0x3FFF) >> 8 & 0xFF
+            cmd_y = 0x100 + int(v * 100) & 0xFF
+            cmd_x = 0x100 + int(-w * 100) & 0xFF
 
             if np.abs(v) > self._min_v or np.abs(w) > self._min_w:
                 self._rnet.send(self._joy_frame + '#' + dec2hex(cmd_x, 2) + dec2hex(cmd_y, 2))
